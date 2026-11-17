@@ -4,67 +4,81 @@
 #include <string.h>
 
 /**
- * @brief �ж��������Ƿ�Ϊȫ��(0xFF)
+ * @brief 判断配置区是否为空（不可用）
+ *
+ * 判空只看 magic 一个哨兵：合法记录 magic 恒为 CONFIG_MAGIC（Init_Config_Info /
+ * Edit_Config_Info 写出），magic != CONFIG_MAGIC 即视为空——覆盖整扇区未写
+ * （全 0xFF）与擦写中途掉电导致 magic 半写损坏（非全 0xFF）两种态。
+ * 不再把 app_info.crc32 == 0xFFFFFFFF 当作空：Init_Config_Info 出厂初始化恰好把
+ * app_info.crc32 写为 0xFFFFFFFF（无固件记录哨兵），旧逻辑导致初始化后每次开机
+ * 都被误判为空 → 反复执行条件C重置 IP。
+ * 该哨兵与主固件 app_board_net_cfg.c 的空扇区初始化语义一致（0xFF = 未记录），
+ * 主固件写入 app_info 真值后该字段即非 0xFF，但 Bootloader 判空不依赖它。
+ * 注：magic 匹配但 config_crc 校验失败的半写态（magic 已写、CRC 未写完）不在此
+ * 判空，由 main.c 条件 D 的 else 分支走条件 C 重建自愈。
  */
 bool Is_Config_Empty(volatile const SysInfo_t *info)
 {
-    // ���ħ����һ���ֹؼ������Ƿ�Ϊ0xFF
-    if ((info->magic == 0xFFFFFFFF && info->config_crc == 0xFFFFFFFF) || (info->app_info.crc32 == 0xFFFFFFFF)) {
+    // 合法记录 magic 恒为 CONFIG_MAGIC，magic 不匹配即视为空
+    if (info->magic != CONFIG_MAGIC) {
         return true;
     }
     return false;
 }
 
 /**
- * @brief ��ʼ��config info��д��flash
+ * @brief 初始化config info并写入flash
  *
- * @param info config info�ṹ��
+ * @param info config info结构体
  */
 void Init_Config_Info(SysInfo_t *info)
 {
-    info->magic      = CONFIG_MAGIC; // ��ʼ��ħ��
-    info->update_sta = updated;      // ��ʼ������״̬��Ϊ�ɹ�
+    info->magic      = CONFIG_MAGIC; // 初始化魔数
+    info->update_sta = updated;      // 初始化升级状态机为成功
 
-    // ��ʼ���̼���Ϣ
+    // 初始化固件信息
     memset(&(info->app_info), 0, sizeof(info->app_info));
     info->app_info.crc32 = 0xFFFFFFFF;
 
-    // ��ʼ������������Ϣ
+    // 初始化网络配置信息
+    // 方案 B（2026-08-21）：port=TCP 业务口（0x2538=9528 现状不变），
+    // udp_port=CQ UDP 业务口（20103）。
     NetConfig_t net_info = {
         .ip   = {192, 168, 114, 200},
         .mask = {255, 255, 255, 0},
         .gw   = {192, 168, 114, 1},
         .port = 0x2538,
+        .udp_port = 20103,
     };
     memcpy(&(info->net_cfg), &net_info, sizeof(NetConfig_t));
 
-    // ����config info��crcУ��ֵ
+    // 计算config info的crc校验值
     info->config_crc = HAL_CRC_Calculate(&hcrc, (uint32_t *)info, (sizeof(SysInfo_t) - sizeof(info->config_crc)) / 4);
 
-    // ����config info����������������д��
+    // 擦除config info所在扇区并将数据写入
     EraseConfigInfo();
     WriteConfigInfo(info);
 }
 
 /**
- * @brief �޸�config info��д��flash
+ * @brief 修改config info并写入flash
  *
- * @param info config info�ṹ��
+ * @param info config info结构体
  */
 void Edit_Config_Info(SysInfo_t *info)
 {
-    // ����config info��crcУ��ֵ
+    // 计算config info的crc校验值
     info->config_crc = HAL_CRC_Calculate(&hcrc, (uint32_t *)info, (sizeof(SysInfo_t) - sizeof(info->config_crc)) / 4);
 
-    // ����config info����������������д��
+    // 擦除config info所在扇区并将数据写入
     EraseConfigInfo();
     WriteConfigInfo(info);
 }
 
 /**
- * @brief ����flash�е�config info
+ * @brief 擦除flash中的config info
  *
- * @return HAL_StatusTypeDef �������
+ * @return HAL_StatusTypeDef 操作结果
  */
 HAL_StatusTypeDef EraseConfigInfo(void)
 {
@@ -72,16 +86,16 @@ HAL_StatusTypeDef EraseConfigInfo(void)
     uint32_t SectorError                   = 0;
     FLASH_EraseInitTypeDef EraseInitStruct = {0};
 
-    HAL_FLASH_Unlock(); // ����flash
+    HAL_FLASH_Unlock(); // 解锁flash
     __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR | FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR | FLASH_FLAG_PGSERR);
 
     EraseInitStruct.TypeErase    = FLASH_TYPEERASE_SECTORS;
-    EraseInitStruct.VoltageRange = FLASH_VOLTAGE_RANGE_3; // ��ѹ��Χ2.7V~3.6V
-    EraseInitStruct.Sector       = FLASH_SECTOR_1;        // ��ȡ������
+    EraseInitStruct.VoltageRange = FLASH_VOLTAGE_RANGE_3; // 电压范围2.7V~3.6V
+    EraseInitStruct.Sector       = FLASH_SECTOR_1;        // 获取扇区号
     EraseInitStruct.NbSectors    = 1;
     HAL_FLASHEx_Erase(&EraseInitStruct, &SectorError);
 
-    if (EraseInitStruct.Sector != FLASH_SECTOR_11) // ��ֹ��ַԽ��
+    if (EraseInitStruct.Sector != FLASH_SECTOR_11) // 防止地址越界
         status = HAL_FLASHEx_Erase(&EraseInitStruct, &SectorError);
 
     HAL_FLASH_Lock();
@@ -89,10 +103,10 @@ HAL_StatusTypeDef EraseConfigInfo(void)
 }
 
 /**
- * @brief ��config infoд��flash
+ * @brief 将config info写入flash
  *
- * @param info config info�ṹ��
- * @return HAL_StatusTypeDef �������
+ * @param info config info结构体
+ * @return HAL_StatusTypeDef 操作结果
  */
 HAL_StatusTypeDef WriteConfigInfo(SysInfo_t *info)
 {
@@ -101,12 +115,12 @@ HAL_StatusTypeDef WriteConfigInfo(SysInfo_t *info)
     HAL_FLASH_Unlock();
     __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR | FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR | FLASH_FLAG_PGSERR);
 
-    // ��word��config infoд��flash
+    // 按word将config info写入flash
     for (uint32_t i = 0; i < sizeof(SysInfo_t) / 4; i++) {
         status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, ADDR_CONFIG_SECTOR + i * 4, ((uint32_t *)info)[i]);
 
         if (status != HAL_OK) {
-            break; // д��������˳�
+            break; // 写入出错，退出
         }
     }
 

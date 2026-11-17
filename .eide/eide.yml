@@ -65,7 +65,7 @@ virtualFolder:
                 - path: Drivers/BSP/Config/config_info.c
               folders: []
 dependenceList: []
-outDir: build
+outDir: ..\build\Bootloader
 miscInfo:
   uid: 75dac117c5f7febbcf11ce938edb0282
 targets:
@@ -93,7 +93,9 @@ targets:
         floatingPointHardware: single
         options:
           version: 5
-          afterBuildTasks: []
+          afterBuildTasks:
+            - name: copy hex to build root
+              command: cmd /c if exist "..\build\Bootloader\Debug\Bootloader.hex" copy /y "..\build\Bootloader\Debug\Bootloader.hex" "..\build\Bootloader.hex"
           asm-compiler: {}
           beforeBuildTasks: []
           c/cpp-compiler:
@@ -133,11 +135,11 @@ targets:
         baseAddr: ""
         bin: ""
         cpuInfo:
-          cpuName: "null"
-          vendor: "null"
+          cpuName: STM32F407ZG
+          vendor: ST
         otherCmds: ""
         proType: 1
-        speed: 8000
+        speed: 32000
       OpenOCD:
         baseAddr: "0x08000000"
         bin: ""
@@ -151,7 +153,7 @@ targets:
         protocol: swd
         speed: 10000
         target: STM32F407ZG
-    uploader: probe-rs
+    uploader: JLink
   Release:
     cppPreprocessAttrs:
       defineList:
@@ -176,7 +178,9 @@ targets:
         floatingPointHardware: single
         options:
           version: 5
-          afterBuildTasks: []
+          afterBuildTasks:
+            - name: copy hex to build root
+              command: cmd /c if exist "..\build\Bootloader\Release\Bootloader.hex" copy /y "..\build\Bootloader\Release\Bootloader.hex" "..\build\Bootloader.hex"
           asm-compiler: {}
           beforeBuildTasks: []
           c/cpp-compiler:
