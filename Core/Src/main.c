@@ -95,12 +95,19 @@ int main(void)
     MX_RTC_Init();
     /* USER CODE BEGIN 2 */
 
+    /* 2026-11-20 诊断：在清复位标志前把原始 RCC->CSR 存入 RTC 备份寄存器，
+     * App 启动时回读 DR10/DR11/DR12（DR10=复位源原始标志、DR11=崩溃计数、
+     * DR12=本次跳转目标）。用于定位"无痕复位"。 */
+    HAL_PWR_EnableBkUpAccess();
+    HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR10, RCC->CSR);
+
     uint32_t jump_target = ADDR_RECOVERY_APP; // 默认Recovery
 
     // 判断是否增加崩溃计数
     if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST)) {
         uint32_t crash_cnt = HAL_RTCEx_BKUPRead(&hrtc, RTC_BKP_DR1) + 1;
         HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR1, crash_cnt);
+        HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR11, crash_cnt);
         __HAL_RCC_CLEAR_RESET_FLAGS();
     }
 
@@ -183,6 +190,9 @@ int main(void)
                 jump_target = ADDR_RECOVERY_APP; // 无Main
         }
     }
+
+    /* 诊断：记录本次跳转目标（DR12） */
+    HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR12, jump_target);
 
     // 跳转前的清理工作
     HAL_IWDG_Refresh(&hiwdg);
